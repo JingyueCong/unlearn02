@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
 #
-# forget05 in-training checkpoint scan.
+# Reproducible forget05 in-training checkpoint scan (no model weights shipped).
 #
-# Phase 1: Train A1 once with max_epochs=10 and save_steps=50
-#          → ~20 intermediate checkpoints across the full lr schedule
-# Phase 2: Eval each ckpt with the EXISTING ep=3 A2 (current best A2)
-#          → finds the true FQ peak that may sit BETWEEN our prior epoch boundaries
+# Phase 0: Train A2 (ep=3, K=40, rw=5) if not already present   (~3 min)
+# Phase 1: Train A1 with max_epochs=10, save_steps=25            (~6 min)
+#          → 40 intermediate checkpoints across the full lr schedule
+# Phase 2: Eval each listed ckpt with A1 + fixed A2              (~12 min × N)
+#          → finds the true FQ peak between prior epoch boundaries
 #
-# Total cost (defaults): ~6 min train + N evals × ~12 min
-# CKPT_STEPS default lists 11 strategic ckpts → ~2.5 hours
+# Prerequisites (one-time):
+#   - env per README.md (conda install uld)
+#   - base model cached: locuslab/tofu_ft_llama2-7b
+#   - retain baseline: data/forget05_llama_wd0.01/eval_results/ds_size300/eval_log_aggregated.json
+#   - R_sub indices pre-computed: data/rsub/forget05_k40.json (checked-in)
+#
+# Total cost (defaults): 3 + 6 + 17*12 = ~3.5 hours
 #
 # Usage:
 #   bash bashes/tofu/forget05_ckpt_scan.sh
 #   GPU=0 bash bashes/tofu/forget05_ckpt_scan.sh
-#   CKPT_STEPS="200 300 400 450 500 550 600 700 800 1000" bash ... # custom list
+#   CKPT_STEPS="400 475 500 525 600" bash ... # custom ckpt list to eval
 
 set -e
 
@@ -28,14 +34,38 @@ RSUB_PATH="data/rsub/forget05_k40.json"
 # Strategic ckpts at 25-step granularity, focused around suspected peak (step 500)
 CKPT_STEPS="${CKPT_STEPS:-200 300 400 425 450 475 500 525 550 575 600 625 650 700 800 900 1000}"
 
-# Reuse existing best A2 (ep=3 K=40)
-A2_CKPT=$(find outputs_trained_models/tofu_dual_f05a2ep3 -name "checkpoint-*" -type d \
+# ---------- Phase 0: ensure A2 (ep=3 K=40) exists ----------
+A2_OUTDIR="outputs_trained_models/tofu_dual_f05a2ep3"
+A2_CKPT=$(find "$A2_OUTDIR" -name "checkpoint-*" -type d 2>/dev/null \
     | awk -F'checkpoint-' '{print $NF, $0}' | sort -n | tail -1 | cut -d' ' -f2-)
 if [ -z "$A2_CKPT" ]; then
-    echo "ERROR: A2 ep=3 ckpt not found at outputs_trained_models/tofu_dual_f05a2ep3"
-    exit 1
+    echo "============================================================"
+    echo "Phase 0: training A2 (ep=3, K=40, rw=5) — not found, doing fresh"
+    echo "============================================================"
+    rm -rf "$A2_OUTDIR"
+    CUDA_VISIBLE_DEVICES=$GPU WANDB_MODE=disabled python scripts/hf_forget_train.py \
+        project="dual_f05a2ep3" \
+        data=tofu \
+        data.dataset.split=$SPLIT \
+        data_mode=dual_a2 \
+        data_mode.r_sub_indices_path=$RSUB_PATH \
+        model=tofu-llama-2 \
+        model_mode=uld \
+        model_mode.num_layer=8 \
+        unlearn_loss=remember+uniform \
+        unlearn_loss.retain_weight=5.0 \
+        trainer.batch_size=8 \
+        trainer.gradient_accumulation_steps=2 \
+        trainer.learning_rate=1e-3 \
+        trainer.max_epochs=3 \
+        trainer.strategy=gpu \
+        OUTPUTMODELDIR="$A2_OUTDIR" \
+        postfix="a2" \
+        "hydra.run.dir=outputs/tune_log/dual_f05a2ep3/\${now:%Y-%m-%d_%H-%M-%S}"
+    A2_CKPT=$(find "$A2_OUTDIR" -name "checkpoint-*" -type d \
+        | awk -F'checkpoint-' '{print $NF, $0}' | sort -n | tail -1 | cut -d' ' -f2-)
 fi
-echo "A2 (fixed): $A2_CKPT"
+echo "A2: $A2_CKPT"
 
 # Where the new A1 long-run goes
 A1_OUTDIR="outputs_trained_models/tofu_dual_f05_a1longrun"
