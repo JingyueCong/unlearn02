@@ -1,0 +1,13 @@
+# Dual-ULD: A2 training data composition.
+# forget-role  = R_sub only                                   (GradDescent)
+# retain-role  = forget_orig + forget_expand + R_far + perturb (Uniform)
+
+expand_forget: True
+expand_qanum: 2
+with_retain: True
+retain_num: 400
+with_perturb: True
+with_dpo: False
+
+data_role: a2
+r_sub_indices_path: ???

@@ -19,8 +19,8 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'False'
 @hydra.main(version_base=None, config_path="../configs", config_name="tune_config")
 def main(configs):
     num_devices = int(os.environ.get('WORLD_SIZE', 1))
+    local_rank = int(os.environ.get('LOCAL_RANK', '0'))
     if os.environ.get('LOCAL_RANK') is not None:
-        local_rank = int(os.environ.get('LOCAL_RANK', '0'))
         device_map = {'': local_rank}
 
     # ! Setup Logger
@@ -110,8 +110,8 @@ def main(configs):
         save_only_model=True,
         ddp_find_unused_parameters=False,
         deepspeed=deepspeed_configfile,
-        save_steps=num_update_steps_per_epoch,
-        eval_steps=num_update_steps_per_epoch,
+        save_steps=trainer_config.get('save_steps', num_update_steps_per_epoch),
+        eval_steps=trainer_config.get('eval_steps', num_update_steps_per_epoch),
         evaluation_strategy="steps",
         seed=configs.get('seed', 42),
         report_to='wandb',
@@ -154,10 +154,12 @@ def main(configs):
     loss_config = configs.get('unlearn_loss')
     loss_function = create_unlearn_loss(loss_config)
     if loss_requries_oracle(loss_config):
+        from uld.model.utils import _attn_kwargs
         with NameTimer("Load oracle"):
             oracle_model = AutoModelForCausalLM.from_pretrained(
                 model_path, torch_dtype=torch.bfloat16,
-                use_flash_attention_2=True, trust_remote_code=True, 
+                trust_remote_code=True,
+                **_attn_kwargs(),
             )
             oracle_model.eval()
             oracle_model.requires_grad_(False)

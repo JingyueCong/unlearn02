@@ -160,3 +160,9 @@ cython_debug/
 #.idea/
 outputs/
 outputs_*/
+.claude/
+.DS_Store
+
+# experiment artifacts (keep small R_sub JSONs, ignore logs)
+*.pyc
+

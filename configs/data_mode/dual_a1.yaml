@@ -1,0 +1,14 @@
+# Dual-ULD: A1 training data composition.
+# forget-role  = forget_orig + forget_expand + R_sub         (GradDescent)
+# retain-role  = R_far + perturb                              (Uniform)
+
+expand_forget: True
+expand_qanum: 2
+with_retain: True
+retain_num: 400
+with_perturb: True
+with_dpo: False
+
+data_role: a1
+# R_sub indices JSON produced by scripts/select_rsub.py. Override at CLI.
+r_sub_indices_path: ???

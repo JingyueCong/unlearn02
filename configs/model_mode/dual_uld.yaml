@@ -1,0 +1,18 @@
+mode: dual_uld
+num_layer: 8
+# A1 subtracts forget ∪ R_sub from base; A2 adds R_sub back.
+weight_a1: -1.0
+weight_a2: 1.0
+top_logit_filter: 0.1
+
+# Checkpoint paths for the two assistants (LoRA dirs produced by
+# hf_forget_train with model_mode=uld). Required for evaluation.
+a1_ckpt_path: ???
+a2_ckpt_path: ???
+
+Lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  bias: none
+  task_type: CAUSAL_LM

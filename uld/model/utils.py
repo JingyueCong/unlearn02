@@ -1,5 +1,5 @@
 import os
-import copy 
+import copy
 import torch
 
 from transformers import AutoModelForCausalLM
@@ -7,6 +7,23 @@ from peft import LoraConfig, get_peft_model
 
 from ..utils import NameTimer
 from .peft_util import find_all_linear_names
+
+
+def _flash_attn_available():
+    try:
+        import flash_attn  # noqa: F401
+        import flash_attn_2_cuda  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _attn_kwargs():
+    """Return kwargs for AutoModelForCausalLM to pick flash-attn-2 if importable,
+    else fall back silently to SDPA. Transformers accepts the absence of the
+    flag and will pick a default implementation."""
+    return {"use_flash_attention_2": True} if _flash_attn_available() else {}
+
 
 def get_dtype(data_type):
     if data_type == 'bfloat16':
@@ -55,8 +72,8 @@ def init_small_llm(origin_config, num_layer, device, hparams=None, base_llm=None
     config.num_hidden_layers = num_layer
     model = AutoModelForCausalLM.from_config(
         config,
-        use_flash_attention_2=True, 
-        torch_dtype=torch.bfloat16, 
+        torch_dtype=torch.bfloat16,
+        **_attn_kwargs(),
     ).to('cpu')
 
     if base_llm is not None:
@@ -73,7 +90,8 @@ def create_full_model(model_path, num_layer=0 ,data_type='bfloat16', **kwargs):
     with NameTimer("Init full model"):
         basellm = AutoModelForCausalLM.from_pretrained(
             model_path, torch_dtype=get_dtype(data_type),
-            use_flash_attention_2=True, trust_remote_code=True,
+            trust_remote_code=True,
+            **_attn_kwargs(),
         )
         if num_layer != 0: #! Construct the small model
             basellm = init_small_llm( 
