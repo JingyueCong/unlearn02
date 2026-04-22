@@ -1,0 +1,7 @@
+# FLAT baseline (arXiv:2410.11143).
+# Forget-data-only f-divergence variational loss.
+# No retain loss — paper uses only forget data.
+
+forget_loss: FLATLossFunc
+retain_loss: null
+retain_weight: 1.0

@@ -231,6 +231,53 @@ def DPOLossFunc(model, input_ids, labels, label_attention_mask, prefer_input_ids
     ).mean() * 2 / beta
     return loss
 
+def FLATLossFunc(
+    model, input_ids, labels, label_attention_mask,
+    prefer_input_ids, prefer_labels, prefer_label_attention_mask,
+    oracle_model=None, f_div='js', **kwargs
+):
+    """FLAT: Forget-data-only Loss AjustmenT (Wang et al. 2024, arXiv:2410.11143).
+
+    Loss maximizes variational f-divergence between template response y_e (e.g.
+    "I don't know") and forget response y_f on forget questions x_f:
+
+        L_FLAT = - E[ g*(v_e) - f*(g*(v_f)) ]
+
+    where v_e, v_f are mean log-probabilities of y_e / y_f under the model given
+    x_f, and (g*, f*) are Fenchel conjugates of the chosen f-divergence.
+
+    f_div options: 'tv' (Total Variation), 'js' (Jensen-Shannon, default), 'kl'.
+    """
+    import math
+
+    # p(y_f | x_f)  — full forget target
+    out_f = model(input_ids, attention_mask=label_attention_mask)
+    tok_loss_f = TokenNextTokenPredictionLoss(out_f.logits, labels)                  # [B]
+    valid_f = (labels[..., 1:] != -100).sum(dim=-1).clamp(min=1).float()
+    v_f = -tok_loss_f / valid_f                                                      # mean log-prob per token
+
+    # p(y_e | x_f)  — template ("I don't know") target
+    out_e = model(prefer_input_ids, attention_mask=prefer_label_attention_mask)
+    tok_loss_e = TokenNextTokenPredictionLoss(out_e.logits, prefer_labels)
+    valid_e = (prefer_labels[..., 1:] != -100).sum(dim=-1).clamp(min=1).float()
+    v_e = -tok_loss_e / valid_e
+
+    if f_div == 'tv':                # TV:   g*(v)=tanh(v)/2,  f*(v)=v
+        g_ve = torch.tanh(v_e) / 2.0
+        g_vf = torch.tanh(v_f) / 2.0
+        f_g_vf = g_vf
+    elif f_div == 'js':              # JS:   g*(v)=log2 - softplus(-v),  f*(v)=-log(2-e^v)
+        g_ve = math.log(2.0) - F.softplus(-v_e)
+        g_vf = math.log(2.0) - F.softplus(-v_f)
+        f_g_vf = -torch.log((2.0 - g_vf.exp()).clamp(min=1e-6))
+    else:                            # KL (Legendre): g*(v)=v,  f*(v)=exp(v-1)
+        g_ve = v_e
+        g_vf = v_f
+        f_g_vf = torch.exp(g_vf - 1.0)
+
+    return -(g_ve - f_g_vf).mean()
+
+
 def NPOLossFunc(model, input_ids, attention_mask, labels, oracle_model, beta=0.1, **kwargs):
     with torch.no_grad():
         oracle_outputs = oracle_model(input_ids, attention_mask=attention_mask, use_cache=True)
@@ -316,10 +363,10 @@ def create_unlearn_loss(loss_config):
         except KeyError:
             raise NotImplementedError(f"Invalid forget loss: {retain_loss}")
     
-    if forget_loss_func.__name__ == 'DPOLossFunc':
+    if forget_loss_func.__name__ in ('DPOLossFunc', 'FLATLossFunc'):
         return PreferLoss(
             forget_loss_func, retain_loss_func, retain_weight=loss_config.get('retain_weight', 1.0)
-        ) 
+        )
     else:
         return ForgetRetainLoss(
             forget_loss_func, retain_loss_func, retain_weight=loss_config.get('retain_weight', 1.0)
