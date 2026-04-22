@@ -1,0 +1,7 @@
+# Unilogit baseline: reverse-KL distillation with uniform-target on forget;
+# standard NTP (GradDescent) on retain.
+# arXiv:2505.06027
+
+forget_loss: UnilogitLossFunc
+retain_loss: GradDescentLossFunc
+retain_weight: 1.0

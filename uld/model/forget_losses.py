@@ -245,6 +245,51 @@ def NPOLossFunc(model, input_ids, attention_mask, labels, oracle_model, beta=0.1
     loss = -F.logsigmoid(beta * log_ratio).mean() * 2 / beta
     return loss
 
+def UnilogitLossFunc(model, input_ids, attention_mask, labels, **kwargs):
+    """Unilogit (Vasilev et al. 2025, arXiv:2505.06027).
+
+    For each shifted target position, build modified logits h_tilde where the
+    target token's logit is set so that after softmax its probability equals
+    1/V (uniform over vocab). Other tokens' logits are kept. Loss = reverse
+    KL(current_model || softmax(h_tilde).detach()).
+
+    No additional hyperparameter.
+    """
+    import math
+    outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+    logits = outputs.logits  # [B, T, V]
+
+    shift_logits = logits[..., :-1, :].contiguous()     # [B, T-1, V]
+    shift_labels = labels[..., 1:].contiguous()         # [B, T-1]
+
+    V = shift_logits.shape[-1]
+    valid = (shift_labels != -100)
+    target_idx = shift_labels.clamp(min=0)              # avoid -100 in gather
+
+    # h[target] per position
+    h_target = shift_logits.gather(-1, target_idx.unsqueeze(-1)).squeeze(-1)   # [B, T-1]
+    lse_all = torch.logsumexp(shift_logits, dim=-1)                             # [B, T-1]
+    # log(sum_{v != t} exp(h[v])) = lse_all + log(1 - exp(h_target - lse_all))
+    ratio = (h_target - lse_all).clamp(max=-1e-5)
+    lse_others = lse_all + torch.log1p(-torch.exp(ratio))
+
+    h_target_new = lse_others - math.log(V - 1)                                 # [B, T-1]
+
+    # Detached teacher distribution
+    h_tilde = shift_logits.detach().clone()
+    h_tilde.scatter_(-1, target_idx.unsqueeze(-1), h_target_new.detach().unsqueeze(-1))
+    log_p_tilde = F.log_softmax(h_tilde, dim=-1)                                # [B, T-1, V]
+
+    # Student distribution
+    log_p_model = F.log_softmax(shift_logits, dim=-1)
+    p_model = log_p_model.exp()
+
+    # reverse KL: KL(p_model || p_tilde) = sum p_model * (log p_model - log p_tilde)
+    kl = (p_model * (log_p_model - log_p_tilde)).sum(dim=-1)                    # [B, T-1]
+    kl = (kl * valid.float()).sum() / valid.float().sum().clamp(min=1.0)
+    return kl
+
+
 def UniformLossFunc(model, input_ids, attention_mask, labels=None, **kwargs):
     outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
     logits = outputs.logits
